@@ -1,22 +1,23 @@
 from config import db
 import heapq
-from datetime import date
+from datetime import date, datetime
 from collections import defaultdict
+from sqlalchemy.ext.mutable import MutableDict
 
 
 class Person(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    first_name = db.Column(db.String(80), unique=False, nullable=False)
-    last_name = db.Column(db.String(80), unique=False, nullable=False)
-    email = db.Column(db.String(80), unique=True, nullable=False)
+    first_name = db.Column(db.String(80), nullable=False)
+    last_name = db.Column(db.String(80), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
     phone_number = db.Column(db.String(15), unique=True, nullable=False)
 
     # We'll store the dates and items separately, using a dictionary and a min-heap
     # stores {date: [item1, item2, ...]}
     expiration_dict = db.Column(
-        db.PickleType, nullable=False, default=defaultdict(list))
-    dates_heap = db.Column(db.PickleType, nullable=False,
-                           default=[])  # stores dates in heap order
+        MutableDict.as_mutable(db.PickleType), nullable=False, default=dict
+    )
+    dates_heap = db.Column(db.PickleType, nullable=False, default=list)
 
     def to_json(self):
         return {
@@ -32,42 +33,55 @@ class Person(db.Model):
     def add_expiration(self, food_item, expiration_date):
         # If expiration_date doesn't exist in expiration_dict, add it and also push to heap
 
-        heapq.heappush(self.dates_heap, expiration_date)
+        # Convert date object to string for dictionary key
+        expiration_date_str = expiration_date.isoformat()
+
+        if expiration_date_str not in self.expiration_dict:
+            heapq.heappush(self.dates_heap, expiration_date_str)
 
         # Append the food item to the expiration list
-        self.expiration_dict[expiration_date].append(food_item)
+        self.expiration_dict.setdefault(
+            expiration_date_str, []).append(food_item)
 
     def get_expiration_date(self):
 
         if not self.dates_heap:
             return None, []
 
+        # Get the earliest date string from the heap
+        earliest_date_str = self.dates_heap[0]
+        earliest_date = datetime.strptime(
+            earliest_date_str, '%Y-%m-%d').date()  # Convert to date object
         today = date.today()
 
-        earliest_day = date(self.dates_heap[0])
-
-        if earliest_day - today == 3:
+        if earliest_date <= today:
+            # Remove the expired date from the heap and dictionary
             heapq.heappop(self.dates_heap)
-            items = self.expiration_dict.pop(earliest_day, [])
-            return earliest_day, items
+            items = self.expiration_dict.pop(earliest_date_str, [])
+            return earliest_date, items
 
-        elif today == earliest_day or today > earliest_day:
-
-            self.remove_expirations(earliest_day)
-
-        return earliest_day, self.expiration_dict[earliest_day]
+        # Return the earliest upcoming expiration date and its items
+        return earliest_date, self.expiration_dict.get(earliest_date_str, [])
 
     def get_food_item(self, food_item):
+        for exp_date, items in self.expiration_dict.items():
+            if food_item in items:
+                return exp_date, items
+        return None, []
 
-        pass
+    def remove_expirations(self):
 
-    def remove_expirations(self, expiration_date):
-        if expiration_date not in self.expiration_dict:
+        if not self.dates_heap:
             return None, []
-        removed_items = self.expiration_dict.pop(expiration_date, None)
-        if removed_items is not None:
-            # If the expiration_date was present in expiration_dict, remove it from the dates_heap
-            self.dates_heap = [
-                d for d in self.dates_heap if d != expiration_date]
-            # Rebuild the heap after removal
-            heapq.heapify(self.dates_heap)
+
+        # Convert the earliest date back to a date object
+        earliest_date_str = self.dates_heap[0]
+        earliest_date = datetime.strptime(earliest_date_str, '%Y-%m-%d').date()
+        today = date.today()
+
+        if earliest_date <= today:
+            heapq.heappop(self.dates_heap)
+            items = self.expiration_dict.pop(earliest_date_str, [])
+            return earliest_date, items
+
+        return earliest_date, self.expiration_dict.get(earliest_date_str, [])

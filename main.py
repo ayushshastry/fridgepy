@@ -1,7 +1,7 @@
 from flask import request, jsonify
 from config import app, db
 from models import Person
-from datetime import datetime, date
+from datetime import datetime
 
 # CRUD METHOD
 
@@ -10,21 +10,15 @@ from datetime import datetime, date
 @app.route('/create_user', methods=['POST'])
 def create_user():
     data = request.json
-
-    user_id = data.get('id')
     first_name = data.get('first_name')
     last_name = data.get('last_name')
     email = data.get('email')
     phone_number = data.get('phone_number')
-    expiration_dict = data.get('expiration_dict')
-    dates_heap = data.get('dates_heap')
 
     if not first_name or not last_name or not email or not phone_number:
-        return (jsonify({'message': 'You need all the credentials'}), 400)
+        return jsonify({'message': 'Missing required fields'}), 400
 
-    # Create the new person instance with actual values
     new_person = Person(
-
         first_name=first_name,
         last_name=last_name,
         email=email,
@@ -34,22 +28,20 @@ def create_user():
     try:
         db.session.add(new_person)
         db.session.commit()
+        return jsonify({"message": "User created successfully!"}), 201
     except Exception as e:
-        return (jsonify({"message": str(e)}), 400,)
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 400
 
-    # 201 -> successful creation
-    return (jsonify({"message": "user created"}), 201)
 
 # READ
 
 
 @app.route("/users", methods=['GET'])
 def get_current_users():
-
     people = Person.query.all()
-
-    json_people = list(map(lambda x: x.to_json(), people))
-    return jsonify({'contacts': json_people})
+    json_people = [person.to_json() for person in people]
+    return jsonify({'users': json_people})
 
 
 # UPDATE
@@ -57,44 +49,91 @@ def get_current_users():
 
 @app.route("/update_user/<int:user_id>", methods=['PATCH'])
 def update_user(user_id):
-    pass
+    user = Person.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    data = request.json
+    user.first_name = data.get('first_name', user.first_name)
+    user.last_name = data.get('last_name', user.last_name)
+    user.email = data.get('email', user.email)
+    user.phone_number = data.get('phone_number', user.phone_number)
+
+    try:
+        db.session.commit()
+        return jsonify({"message": "User updated successfully!"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 400
 
 
 @app.route('/add_item/<int:user_id>', methods=["POST"])
 def add_item(user_id):
-
-    current_user = Person.query.get(user_id)
-
-    if not current_user:
-        return jsonify({'error': 'User Does Not Exist'}), 404
+    user = Person.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
 
     data = request.json
     food_item = data.get('food_item')
     exp_date = data.get('expiration_date')
 
-    # Validate the data
     if not food_item or not exp_date:
-        return jsonify({"error": "food_item and expiration_date are required"}), 400
+        return jsonify({"error": "Both food_item and expiration_date are required"}), 400
 
     try:
-        # Convert the expiration date string to a date object
-        expiration_date = datetime.strptime(
-            exp_date, '%Y-%m-%d').date()
-    except ValueError:
-        return jsonify({"error": "Invalid date format, expected YYYY-MM-DD"}), 400
-
-    try:
-        # Add the item and expiration date to the user's expiration_dict
-        current_user.add_expiration(food_item, expiration_date)
-
-        # Commit changes to the database
+        # Convert expiration_date from string to date object
+        expiration_date = datetime.strptime(exp_date, '%Y-%m-%d').date()
+        user.add_expiration(food_item, expiration_date)
         db.session.commit()
-        return jsonify({"message": "Item added successfully!", "expiration_dict": current_user.expiration_dict}), 200
+        return jsonify({
+            "message": "Item added successfully!",
+            "expiration_dict": user.expiration_dict
+        }), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 400
 
 # DELETE
+
+# REMOVE ITEM
+
+
+@app.route('/remove_item/<int:user_id>', methods=["POST"])
+def remove_item(user_id):
+    user = Person.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    data = request.json
+    exp_date = data.get('expiration_date')
+
+    if not exp_date:
+        return jsonify({"error": "expiration_date is required"}), 400
+
+    try:
+        expiration_date = datetime.strptime(exp_date, '%Y-%m-%d').date()
+        user.remove_expirations(expiration_date)
+        db.session.commit()
+        return jsonify({"message": f"Items on {exp_date} removed successfully!"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 400
+
+
+# DELETE USER
+@app.route('/delete_user/<int:user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    user = Person.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    try:
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({'message': 'User deleted successfully!'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
 
 
 if __name__ == '__main__':
